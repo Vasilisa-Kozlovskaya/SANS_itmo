@@ -2,7 +2,7 @@ import re
 from langdetect import detect, DetectorFactory
 from ftfy import fix_text
 ##  Очистка и фильтрация
-def clean_text(self, text):
+def clean_text(text):
     # 1. Нормализация Unicode и исправление "битых" символов
     text = fix_text(text)
 
@@ -19,7 +19,7 @@ def clean_text(self, text):
         return None
 
     return text
-def segment_text(self, text, max_tokens=800):
+def segment_text(text, max_tokens=800):
         # Разбиение длинных текстов на части (~512-1024 токенов)
     words = text.split()
     segments = [" ".join(words[i:i + max_tokens]) for i in range(0, len(words), max_tokens)]

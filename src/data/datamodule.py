@@ -121,9 +121,9 @@ class CommonCrawlDataModule(pl.LightningDataModule):
 
         print("Processing and filtering texts...")
         for raw_text in raw_texts:
-            cleaned = self.clean_text(raw_text)
+            cleaned = clean_text(raw_text)
             if cleaned:
-                segments = self.segment_text(cleaned)
+                segments = segment_text(cleaned)
                 for seg in segments:
                     entropy, density = self.calculate_metrics(seg)
                     # Фильтрация по энтропии (удаляем слишком предсказуемый или хаотичный текст)
