@@ -180,6 +180,49 @@ class GPTLanguageModel(nn.Module):
         # Логиты
         return self.lm_head(out)
 
+    @torch.no_grad()
+    def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = None) -> torch.Tensor:
+        """
+        Авторегрессионная генерация текста (Inference).
+        idx: тензор начальных токенов (затравка) размера (B, T)
+        max_new_tokens: сколько токенов сгенерировать суммарно
+        temperature: контролирует случайность (чем выше, тем разнообразнее текст)
+        top_k: ограничение выборки только K лучшими токенами (для качества)
+        """
+        self.eval() # Переводим модель в режим оценки
+        
+        for _ in range(max_new_tokens):
+            # Во время генерации одного текста все токены принадлежат одной последовательности (id = 1)
+            sequence_ids = torch.ones_like(idx, device=idx.device)
+            
+            # Если длина превышает max_len, обрезаем контекст слева
+            # (ограничение синусоидального позиционного кодирования)
+            max_pos = self.pos_encoding.pe.size(0)
+            idx_cond = idx if idx.size(1) <= max_pos else idx[:, -max_pos:]
+            sequence_ids_cond = sequence_ids[:, :idx_cond.size(1)]
+            
+            # Получаем логиты модели
+            logits = self(idx_cond, sequence_ids_cond) # (B, T, vocab_size)
+            
+            # Нас интересует предсказание только для самого последнего токена
+            logits = logits[:, -1, :] / temperature # (B, vocab_size)
+            
+            # Опционально: применение Top-K фильтрации
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = float('-inf')
+                
+            # Превращаем логиты в вероятности
+            probs = torch.softmax(logits, dim=-1)
+            
+            # Сэмплируем следующий токен
+            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            
+            # Добавляем сгенерированный токен в общий контекст
+            idx = torch.cat((idx, idx_next), dim=1)
+            
+        return idx
+
 
 def compute_packed_loss(logits: torch.Tensor, targets: torch.Tensor, sequence_ids: torch.Tensor, criterion: nn.Module) -> torch.Tensor:
     """
