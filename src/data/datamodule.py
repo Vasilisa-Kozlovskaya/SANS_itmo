@@ -230,7 +230,7 @@ class WikiTextProcessing(CommonCrawlDataModule):
 class PackedDataset(Dataset):
     """
     Обёртка над упакованными блоками токенов для авторегрессионного обучения GPT.
-    Формирует X (inputs), Y (targets) и sequence_ids для маскирования стыков.
+    Возвращает ровно 2 элемента (кортеж), как ожидает GPTLightningModule.
     """
     def __init__(self, data_blocks, block_size=512):
         self.data = data_blocks
@@ -242,20 +242,12 @@ class PackedDataset(Dataset):
     def __getitem__(self, idx):
         block = self.data[idx]
         
-        # Превращаем в тензор
+        # Превращаем полный блок в тензор (размерность: block_size)
         tokens = torch.tensor(block, dtype=torch.long)
         
-        # Для авторегрессии: 
-        # Inputs (X) — все токены, кроме последнего
-        x = tokens[:-1]
-        # Targets (Y) — все токены, кроме первого (сдвиг влево)
-        y = tokens[1:]
+        # Формируем sequence_ids для функции потерь 
+        sequence_ids = torch.ones_like(tokens)
+        sequence_ids[tokens == 0] = 0  # зануляем id там, где паддинг
         
-        # Формируем sequence_ids для функции потерь (compute_packed_loss из gpt_model.py)
-        # Если при packed batching нет уникальные ID документов, 
-        # то в простейшем случае считаем весь блок одной последовательностью (заполняем id = 1).
-        # Если внутри блока есть паддинги (0), то id для них должен быть 0.
-        sequence_ids = torch.ones_like(x)
-        sequence_ids[x == 0] = 0 # зануляем id там, где паддинг
-        
-        return x, y, sequence_ids
+        # Возвращаем ровно два элемента, чтобы распаковка `tokens, sequence_ids = batch` сработала без ошибок
+        return tokens, sequence_ids
