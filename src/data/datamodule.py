@@ -151,6 +151,24 @@ class CommonCrawlDataModule(pl.LightningDataModule):
         # Здесь обычно происходит разделение на train/val
         pass
 
+    def train_dataloader(self):
+    # packed_data_train должен быть доступен внутри класса после обработки
+    # Например, вы можете передавать packed_data прямо в конструктор или генерировать в setup()
+        dataset = PackedDataset(self.packed_data_train)
+        return DataLoader(
+            dataset, 
+            batch_size=self.batch_size, 
+            shuffle=True, 
+            drop_last=True,
+            num_workers=2 # для Colab оптимально 2-4
+        )
+
+def val_dataloader(self):
+    if hasattr(self, 'packed_data_val') and self.packed_data_val:
+        dataset = PackedDataset(self.packed_data_val)
+        return DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
+    return None
+
 # WARC_URL = "https://data.commoncrawl.org/crawl-data/CC-NEWS/2025/02/CC-NEWS-20250201012811-00559.warc.gz"
 
 class WikiTextProcessing(CommonCrawlDataModule):
@@ -208,3 +226,36 @@ class WikiTextProcessing(CommonCrawlDataModule):
 
         print(f"Created {len(packed_batches)} packed blocks.")
         return packed_batches
+
+class PackedDataset(Dataset):
+    """
+    Обёртка над упакованными блоками токенов для авторегрессионного обучения GPT.
+    Формирует X (inputs), Y (targets) и sequence_ids для маскирования стыков.
+    """
+    def __init__(self, data_blocks, block_size=512):
+        self.data = data_blocks
+        self.block_size = block_size
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        block = self.data[idx]
+        
+        # Превращаем в тензор
+        tokens = torch.tensor(block, dtype=torch.long)
+        
+        # Для авторегрессии: 
+        # Inputs (X) — все токены, кроме последнего
+        x = tokens[:-1]
+        # Targets (Y) — все токены, кроме первого (сдвиг влево)
+        y = tokens[1:]
+        
+        # Формируем sequence_ids для функции потерь (compute_packed_loss из gpt_model.py)
+        # Если при packed batching нет уникальные ID документов, 
+        # то в простейшем случае считаем весь блок одной последовательностью (заполняем id = 1).
+        # Если внутри блока есть паддинги (0), то id для них должен быть 0.
+        sequence_ids = torch.ones_like(x)
+        sequence_ids[x == 0] = 0 # зануляем id там, где паддинг
+        
+        return x, y, sequence_ids
