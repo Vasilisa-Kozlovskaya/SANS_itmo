@@ -1,19 +1,14 @@
 import os
-import re
-import requests
 import gzip
 import torch
-import numpy as np
+import requests
 from warcio.archiveiterator import ArchiveIterator
 from trafilatura import extract
-from langdetect import detect, DetectorFactory
-from ftfy import fix_text
 from transformers import GPT2LMHeadModel, GPT2TokenizerFast
-from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 from src.utils import clean_text, segment_text
 from datasets import load_dataset
+from src.tokenization import CustomTokenizer
 
 class CommonCrawlDataModule(pl.LightningDataModule):
     def __init__(self, warc_url, raw_dir='data/raw', processed_dir='data/processed', batch_size=4):
@@ -86,7 +81,7 @@ class CommonCrawlDataModule(pl.LightningDataModule):
         # Токенизируем текст
         inputs = self.tokenizer_gpt2(text, return_tensors="pt", truncation=True, max_length=1024)
 
-        # ПЕРЕНОСИМ ДАННЫЕ НА GPU
+        # перенос данных на gpu
         # Перебираем все ключи в словаре (input_ids, attention_mask) и кидаем на то же устройство, что и модель
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -118,22 +113,6 @@ class CommonCrawlDataModule(pl.LightningDataModule):
                     if 3.0 < entropy < 7.0:
                         processed_data.append({"text": seg, "entropy": entropy, "density": density})
 
-
-        print("Processing and filtering texts...")
-        for raw_text in raw_texts:
-            cleaned = clean_text(raw_text)
-            if cleaned:
-                segments = segment_text(cleaned)
-                for seg in segments:
-                    entropy, density = self.calculate_metrics(seg)
-                    # Фильтрация по энтропии (удаляем слишком предсказуемый или хаотичный текст)
-                    if 3.0 < entropy < 7.0:
-                        processed_data.append({
-                            "text": seg,
-                            "entropy": entropy,
-                            "density": density
-                        })
-
         # Удаление дубликатов по тексту
         unique_data = {d['text']: d for d in processed_data}.values()
         self.final_data = list(unique_data)
@@ -154,10 +133,10 @@ class CommonCrawlDataModule(pl.LightningDataModule):
 # WARC_URL = "https://data.commoncrawl.org/crawl-data/CC-NEWS/2025/02/CC-NEWS-20250201012811-00559.warc.gz"
 
 class WikiTextProcessing(CommonCrawlDataModule):
-    def __init__(self, cc_bpe_tokenizer, **kwargs):
-        # Наследуем инициализацию, но передаем уже обученный BPE токенизатор
+    def __init__(self, cc_bpe_tokenizer: CustomTokenizer, **kwargs):
+        """Принимает наш кастомный объект токенизатора."""
         super().__init__(warc_url=None, **kwargs)
-        self.bpe_tokenizer = cc_bpe_tokenizer # Используем токенизатор из CC
+        self.bpe_tokenizer = cc_bpe_tokenizer
 
     def fetch_wikitext(self):
         print("Loading WikiText from Hugging Face...")
@@ -186,17 +165,18 @@ class WikiTextProcessing(CommonCrawlDataModule):
     def create_packed_batches(self, texts, block_size=512):
         print(f"Starting Packed Batching (block size: {block_size})...")
         
-        # 1. Токенизируем все тексты и добавляем EOS токен в конец каждого
         all_token_ids = []
-        eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") # Или другой разделитель
+        # Вызываем метод token_to_id класса
+        eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") 
         if eos_token_id is None:
-            eos_token_id = 0 
+            eos_token_id = 0
 
-        for text in texts:
-            encoded = self.bpe_tokenizer.encode(text)
-            all_token_ids.extend(encoded.ids + [eos_token_id])
+        for  text in texts:
+            # Вызываем метод encode класса (возвращает чистый список id)
+            encoded_ids = self.bpe_tokenizer.encode(text)
+            all_token_ids.extend(encoded_ids + [eos_token_id])
 
-        # 2. Разбиваем длинный список токенов на блоки фиксированной длины
+        # Разбиваем длинный список токенов на блоки фиксированной длины
         total_length = len(all_token_ids)
         # Отрезаем остаток, который не влезает в полный блок
         total_length = (total_length // block_size) * block_size

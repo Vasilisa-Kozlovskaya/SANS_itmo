@@ -1,39 +1,152 @@
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 import re
-def run_tokenization_tasks(data):
-    texts = [d['text'] for d in data]
-    sample_text = texts[0] if texts else "Sample text for tokenization."
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+from collections import defaultdict
 
-    print("\n--- Tokenization Tasks ---")
+class CustomTokenizer:
+    def __init__(self, mode="bpe", vocab_size=5000):
+        """
+        Режимы (mode): 'char', 'word', 'bpe'
+        """
+        self.mode = mode
+        self.vocab_size = vocab_size
+        self.vocab = {}
+        self.inverse_vocab = {}
+        
+        # Специфичные структуры для BPE
+        self.bpe_merges = []  # Список выученных слияний в виде кортежей (id1, id2)
 
-    # 1. Посимвольная токенизация
-    char_vocab = sorted(list(set("".join(texts))))
-    char_to_id = {char: i for i, char in enumerate(char_vocab)}
-    char_encoded = [char_to_id[c] for c in sample_text if c in char_to_id]
-    print(f"Char Vocab Size: {len(char_vocab)}")
-    print(f"Sample Char Sequence Length: {len(char_encoded)}")
+    def _get_pair_stats(self, ids_list):
+        """Вспомогательный метод: подсчет частоты пар соседних токенов."""
+        counts = defaultdict(int)
+        for ids in ids_list:
+            for i in range(len(ids) - 1):
+                counts[(ids[i], ids[i+1])] += 1
+        return counts
 
-    # 2. Пословная токенизация
-    word_vocab = set()
-    for t in texts[:100]: # Ограничение для экономии памяти
-        word_vocab.update(re.findall(r'\w+', t.lower()))
-    word_to_id = {word: i for i, word in enumerate(word_vocab)}
-    word_encoded = [word_to_id[w] for w in re.findall(r'\w+', sample_text.lower()) if w in word_to_id]
-    print(f"Word Vocab Size (subset): {len(word_vocab)}")
-    print(f"Sample Word Sequence Length: {len(word_encoded)}")
+    def _merge_pair(self, ids_list, pair, new_id):
+        """Вспомогательный метод: замена пары токенов на новый ID во всем корпусе."""
+        new_ids_list = []
+        for ids in ids_list:
+            new_ids = []
+            i = 0
+            while i < len(ids):
+                if i < len(ids) - 1 and (ids[i], ids[i+1]) == pair:
+                    new_ids.append(new_id)
+                    i += 2
+                else:
+                    new_ids.append(ids[i])
+                    i += 1
+            new_ids_list.append(new_ids)
+        return new_ids_list
 
-    # 3. BPE Токенизация (Byte Pair Encoding)
-    # Используем библиотеку tokenizers от Hugging Face
-    bpe_tokenizer = Tokenizer(models.BPE(unk_token="[UNK]"))
-    trainer = trainers.BpeTrainer(vocab_size=5000, special_tokens=["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]"])
-    bpe_tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    def train(self, texts):
+        """Обучение токенизатора на корпусе текстов."""
+        if self.mode == "char":
+            char_vocab = sorted(list(set("".join(texts))))
+            self.vocab = {char: i for i, char in enumerate(char_vocab)}
+            self.inverse_vocab = {i: char for char, i in self.vocab.items()}
+            print(f"Char Vocab Size: {len(self.vocab)}")
 
-    # Обучаем на всем (или части) очищенном датасете
-    bpe_tokenizer.train_from_iterator(texts, trainer)
+        elif self.mode == "word":
+            word_vocab = set()
+            for t in texts[:100]:  
+                word_vocab.update(re.findall(r'\w+', t.lower()))
+            
+            word_vocab = sorted(list(word_vocab))
+            self.vocab = {"[UNK]": 0}
+            for i, word in enumerate(word_vocab, start=1):
+                self.vocab[word] = i
+            self.inverse_vocab = {i: word for word, i in self.vocab.items()}
+            print(f"Word Vocab Size (subset): {len(self.vocab)}")
 
-    encoded = bpe_tokenizer.encode(sample_text)
-    print(f"BPE Vocab Size: {bpe_tokenizer.get_vocab_size()}")
-    print(f"BPE Encoded Sequence Length: {len(encoded.ids)}")
-    return bpe_tokenizer
+        elif self.mode == "bpe":
+            print(f"Training custom BPE tokenizer to vocab_size={self.vocab_size}...")
+            
+            # Инициализируем базовый посимвольный словарь + специальные токены
+            special_tokens = ["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]"]
+            self.vocab = {tok: i for i, tok in enumerate(special_tokens)}
+            
+            # Собираем все уникальные символы из текста
+            unique_chars = sorted(list(set("".join(texts))))
+            for char in unique_chars:
+                if char not in self.vocab:
+                    self.vocab[char] = len(self.vocab)
+            
+            # Переводим тексты в списки базовых ID символов (используем подвыборку для скорости обучения)
+            # Из-за чистого Python обучение на большом датасете может быть долгим
+            train_texts = texts[:500] 
+            ids_list = [[self.vocab[c] for c in t] for t in train_texts]
+            
+            # Цикл итеративного слияния пар (BPE алгоритм)
+            num_merges = self.vocab_size - len(self.vocab)
+            current_new_id = len(self.vocab)
+            
+            for stage in range(num_merges):
+                stats = self._get_pair_stats(ids_list)
+                if not stats:
+                    break
+                    
+                # Находим самую частую пару
+                best_pair = max(stats, key=stats.get)
+                if stats[best_pair] < 2: 
+                    break # Если пары встречаются слишком редко, останавливаемся
+                
+                # Запоминаем слияние
+                self.bpe_merges.append(best_pair)
+                
+                # Создаем текстовое представление нового токена для визуализации/словаря
+                # Находим текстовые элементы по их ID в inverse_vocab или vocab
+                self.inverse_vocab = {v: k for k, v in self.vocab.items()}
+                part1 = self.inverse_vocab.get(best_pair[0], f"id_{best_pair[0]}")
+                part2 = self.inverse_vocab.get(best_pair[1], f"id_{best_pair[1]}")
+                new_token_str = part1 + part2
+                
+                self.vocab[new_token_str] = current_new_id
+                
+                # Проводим замену во всем обучающем корпусе
+                ids_list = self._merge_pair(ids_list, best_pair, current_new_id)
+                current_new_id += 1
+                
+            self.inverse_vocab = {v: k for k, v in self.vocab.items()}
+            print(f"Custom BPE trained! Final Vocab Size: {len(self.vocab)}")
 
-# bpe_tokenizer = run_tokenization_tasks(dm.final_data)
+    def encode(self, text):
+        """Кодирование текста в идентификаторы (IDs)."""
+        if self.mode == "char":
+            return [self.vocab[c] for c in text if c in self.vocab]
+            
+        elif self.mode == "word":
+            words = re.findall(r'\w+', text.lower())
+            return [self.vocab.get(w, self.vocab["[UNK]"]) for w in words]
+            
+        elif self.mode == "bpe":
+            # Сначала разбиваем строку на базовые символы
+            # Если символ неизвестен, временно подставляем ID для [UNK]
+            unk_id = self.vocab["[UNK]"]
+            ids = [self.vocab.get(c, unk_id) for c in text]
+            
+            # Последовательно применяем все выученные слияния в правильном порядке
+            for pair in self.bpe_merges:
+                # Ищем заменяемую пару в нашем списке ID для кодируемого текста
+                new_ids = []
+                i = 0
+                pair_target_id = self.vocab.get(
+                    self.inverse_vocab[pair[0]] + self.inverse_vocab[pair[1]], 
+                    None
+                )
+                if pair_target_id is None:
+                    continue
+                    
+                while i < len(ids):
+                    if i < len(ids) - 1 and (ids[i], ids[i+1]) == pair:
+                        new_ids.append(pair_target_id)
+                        i += 2
+                    else:
+                        new_ids.append(ids[i])
+                        i += 1
+                ids = new_ids
+            return ids
+
+    def token_to_id(self, token):
+        """Получение ID токена (для Packed Batching)."""
+        return self.vocab.get(token, None)
