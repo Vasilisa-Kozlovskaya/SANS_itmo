@@ -8,7 +8,7 @@ from transformers import GPT2LMHeadModel, GPT2TokenizerFast
 import pytorch_lightning as pl
 from src.utils import clean_text, segment_text
 from datasets import load_dataset
-from src.tokenization import CustomTokenizer
+from src.tokenization.tokenizer import CustomTokenizer
 
 class CommonCrawlDataModule(pl.LightningDataModule):
     def __init__(self, warc_url, raw_dir='data/raw', processed_dir='data/processed', batch_size=4):
