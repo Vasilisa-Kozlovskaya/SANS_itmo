@@ -141,7 +141,7 @@ class WikiTextProcessing(CommonCrawlDataModule):
     def fetch_wikitext(self):
         print("Loading WikiText from Hugging Face...")
         # Загружаем wikitext-2 (он компактный)
-        dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+        dataset = load_dataset("huggingface/wikitext", "wikitext-2-raw-v1", split="train")
         # Извлекаем тексты, убирая пустые строки, которые часто встречаются в raw wikitext
         return [line['text'] for line in dataset if len(line['text'].strip()) > 0]
 
