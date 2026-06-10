@@ -90,7 +90,7 @@ def main():
         max_steps=cfg.training.max_steps
     )
     
-    # Инициализируйте ваш DataModule, созданный в ЛР1
+    # Инициализфция DataModule, созданный в ЛР1
     datamodule = PackedDataModule(batch_size=cfg.training.batch_size)
     
     # 7. Конфигурируем PyTorch Lightning Trainer

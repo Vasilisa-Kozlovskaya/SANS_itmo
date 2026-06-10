@@ -166,25 +166,87 @@ class WikiTextProcessing(CommonCrawlDataModule):
         print(f"Starting Packed Batching (block size: {block_size})...")
         
         all_token_ids = []
-        # Вызываем метод token_to_id класса
+        all_seq_ids = []
+        current_seq_id = 1  # Начинаем с 1 (0 зарезервирован под паддинг)
+        
         eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") 
         if eos_token_id is None:
             eos_token_id = 0
 
-        for  text in texts:
-            # Вызываем метод encode класса (возвращает чистый список id)
+        for text in texts:
             encoded_ids = self.bpe_tokenizer.encode(text)
-            all_token_ids.extend(encoded_ids + [eos_token_id])
+            tokens_to_add = encoded_ids + [eos_token_id]
+            
+            all_token_ids.extend(tokens_to_add)
+            # Присваиваем каждому токену текущего текста его уникальный ID последовательности
+            all_seq_ids.extend([current_seq_id] * len(tokens_to_add))
+            current_seq_id += 1
 
         # Разбиваем длинный список токенов на блоки фиксированной длины
         total_length = len(all_token_ids)
-        # Отрезаем остаток, который не влезает в полный блок
         total_length = (total_length // block_size) * block_size
         
         packed_batches = []
+        packed_seq_ids = []
         for i in range(0, total_length, block_size):
-            batch = all_token_ids[i : i + block_size]
-            packed_batches.append(torch.tensor(batch))
+            batch_tokens = all_token_ids[i : i + block_size]
+            batch_seqs = all_seq_ids[i : i + block_size]
+            
+            packed_batches.append(torch.tensor(batch_tokens))
+            packed_seq_ids.append(torch.tensor(batch_seqs))
 
         print(f"Created {len(packed_batches)} packed blocks.")
-        return packed_batches
+        return packed_batches, packed_seq_ids
+
+class PackedDataset(torch.utils.data.Dataset):
+    """Простой Dataset для выдачи пар (tokens, sequence_ids)"""
+    def __init__(self, tokens, sequence_ids):
+        self.tokens = tokens
+        self.sequence_ids = sequence_ids
+
+    def __len__(self):
+        return len(self.tokens)
+
+    def __getitem__(self, idx):
+        return self.tokens[idx], self.sequence_ids[idx]
+
+
+class PackedDataModule(pl.LightningDataModule):
+    """DataModule для автоматизации Packed Batching в PyTorch Lightning"""
+    def __init__(self, cc_bpe_tokenizer=None, batch_size=4, block_size=512):
+        super().__init__()
+        self.tokenizer = cc_bpe_tokenizer
+        self.batch_size = batch_size
+        self.block_size = block_size
+        
+        # Если токенизатор не передан, попробуем загрузить дефолтный (настройте путь под себя)
+        if self.tokenizer is None:
+            print("Предупреждение: токенизатор не передан в PackedDataModule. Инициализируем дефолтный.")
+            # self.tokenizer = CustomTokenizer.load("path_to_your_tokenizer.json")
+
+    def setup(self, stage=None):
+        # Используем существующий WikiTextProcessing для загрузки и очистки
+        wiki_processor = WikiTextProcessing(cc_bpe_tokenizer=self.tokenizer)
+        processed_texts = wiki_processor.process_wikitext()
+        
+        # Генерируем упакованные токены и маски последовательностей
+        tokens, sequence_ids = wiki_processor.create_packed_batches(processed_texts, block_size=self.block_size)
+        
+        # Оборачиваем в Dataset
+        dataset = PackedDataset(tokens, sequence_ids)
+        
+        # Разделяем на тренировочную и валидационную выборки (90% / 10%)
+        train_len = int(0.9 * len(dataset))
+        val_len = len(dataset) - train_len
+        
+        if train_len > 0 and val_len > 0:
+            self.train_dataset, self.val_dataset = torch.utils.data.random_split(dataset, [train_len, val_len])
+        else:
+            self.train_dataset = dataset
+            self.val_dataset = dataset
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
