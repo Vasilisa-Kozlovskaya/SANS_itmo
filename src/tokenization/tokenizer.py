@@ -120,32 +120,46 @@ class CustomTokenizer:
             return [self.vocab.get(w, self.vocab["[UNK]"]) for w in words]
             
         elif self.mode == "bpe":
-            # Сначала разбиваем строку на базовые символы
-            # Если символ неизвестен, временно подставляем ID для [UNK]
-            unk_id = self.vocab["[UNK]"]
+             # 1. Предварительная подготовка: переводим текст в список ID базовых символов
+             # Кэшируем unk_id, чтобы не лезть в словарь на каждом шаге
+            unk_id = self.vocab.get("[UNK]", 0)
             ids = [self.vocab.get(c, unk_id) for c in text]
-            
-            # Последовательно применяем все выученные слияния в правильном порядке
+    
+            if len(ids) < 2:
+                return ids
+
+             # 2. Создаем словарь правил для быстрого поиска
+             # Вместо цикла по self.bpe_merges, используем lookup-таблицу
+             # { (id_left, id_right): new_id }
+            merge_map = {}
             for pair in self.bpe_merges:
-                # Ищем заменяемую пару в нашем списке ID для кодируемого текста
-                new_ids = []
-                i = 0
-                pair_target_id = self.vocab.get(
-                    self.inverse_vocab[pair[0]] + self.inverse_vocab[pair[1]], 
-                    None
-                )
-                if pair_target_id is None:
-                    continue
-                    
-                while i < len(ids):
-                    if i < len(ids) - 1 and (ids[i], ids[i+1]) == pair:
-                        new_ids.append(pair_target_id)
-                        i += 2
-                    else:
-                        new_ids.append(ids[i])
-                        i += 1
-                ids = new_ids
-            return ids
+                pair_str = self.inverse_vocab[pair[0]] + self.inverse_vocab[pair[1]]
+                if pair_str in self.vocab:
+                    merge_map[tuple(pair)] = self.vocab[pair_str]
+
+             # 3. Итеративное применение слияний
+             # Мы продолжаем процесс, пока можно слить хотя бы одну пару
+            while True:
+                 # Ищем все возможные пары в текущем списке ids
+                pairs = {}
+                for i in range(len(ids) - 1):
+                    pair = (ids[i], ids[i+1])
+                    if pair in merge_map:
+                        # Храним индекс первого вхождения пары
+                        pairs[pair] = i
+                        break # Находим только первое слияние согласно приоритету
+        
+                if not pairs:
+                    break # Слияния больше невозможны
+            
+                 # Применяем первое найденное слияние (самое приоритетное)
+                pair, idx = list(pairs.items())[0]
+                new_id = merge_map[pair]
+        
+                 # Обновляем список ids
+                ids = ids[:idx] + [new_id] + ids[idx+2:]
+        
+        return ids
 
     def token_to_id(self, token):
         """Получение ID токена (для Packed Batching)."""

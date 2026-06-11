@@ -46,16 +46,16 @@ class GPTLightningModule(pl.LightningModule):
 
     def _shared_step(self, batch):
         """Вспомогательный метод для распаковки батча и расчета loss."""
-        # Адаптируйте под формат вашего Dataset/DataModule из ЛР1
+        # Распаковываем батч (наш PackedDataset возвращает кортеж из двух элементов)
         if isinstance(batch, dict):
             tokens = batch["tokens"]
             sequence_ids = batch["sequence_ids"]
         else:
             tokens, sequence_ids = batch
-            
-        # Прямой проход модели (получаем логиты для ВСЕХ токенов в packed batch)
-        logits = self(tokens, sequence_ids)
         
+        # Прямой проход модели (передаем ОБА обязательных аргумента)
+        logits = self(tokens, sequence_ids=sequence_ids)
+    
         # Расчет специализированного лосса, который маскирует паддинги и стыки
         loss = compute_packed_loss(logits, tokens, sequence_ids, self.criterion)
         return loss
@@ -70,18 +70,20 @@ class GPTLightningModule(pl.LightningModule):
         self.log("train_ppl", train_ppl, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        inputs, targets = batch
-        outputs = self(inputs)
-        
-        loss = compute_packed_loss(outputs, targets)
-        val_ppl = torch.exp(loss)
-        
-        # Для валидации обычно логируют только по эпохам (on_step=False)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_ppl", val_ppl, on_step=False, on_epoch=True, prog_bar=True)
-        
-        return loss
+def validation_step(self, batch, batch_idx):
+    # Используем общий метод для расчета лосса — он теперь сам правильно 
+    # достанет токены и sequence_ids, а также передаст их в forward()
+    loss = self._shared_step(batch)
+    
+    # Считаем перплексию (PPL) на валидации
+    val_ppl = torch.exp(loss)
+    
+    # Логируем метрики по эпохам (on_step=False)
+    self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+    self.log("val_ppl", val_ppl, on_step=False, on_epoch=True, prog_bar=True)
+    
+    return loss
+
 
     def configure_optimizers(self):
         """
