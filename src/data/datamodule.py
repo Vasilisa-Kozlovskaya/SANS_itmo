@@ -161,42 +161,33 @@ class WikiTextProcessing(CommonCrawlDataModule):
         print(f"WikiText processed. Remaining objects: {len(processed_data)}")
         return processed_data
 
-    ##  PACKED BATCHING
     def create_packed_batches(self, texts, block_size=512):
-        print(f"Starting Packed Batching (block size: {block_size})...")
-        
-        all_token_ids = []
-        all_seq_ids = []
-        current_seq_id = 1  # Начинаем с 1 (0 зарезервирован под паддинг)
-        
-        eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") 
-        if eos_token_id is None:
-            eos_token_id = 0
+    print(f"Starting Optimized Packed Batching (block size: {block_size})...")
+    
+    eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") or 0
+    
+    # 1. Используем генератор или map, чтобы избежать явных циклов Python, если возможно.
+    # Если токенизатор позволяет, лучше подавать весь текст списком, а не по одной строке.
+    all_tokens = []
+    for text in texts:
+        all_tokens.extend(self.bpe_tokenizer.encode(text))
+        all_tokens.append(eos_token_id)
 
-        for text in texts:
-            encoded_ids = self.bpe_tokenizer.encode(text)
-            tokens_to_add = encoded_ids + [eos_token_id]
-            
-            all_token_ids.extend(tokens_to_add)
-            # Присваиваем каждому токену текущего текста его уникальный ID последовательности
-            all_seq_ids.extend([current_seq_id] * len(tokens_to_add))
-            current_seq_id += 1
-
-        # Разбиваем длинный список токенов на блоки фиксированной длины
-        total_length = len(all_token_ids)
-        total_length = (total_length // block_size) * block_size
-        
-        packed_batches = []
-        packed_seq_ids = []
-        for i in range(0, total_length, block_size):
-            batch_tokens = all_token_ids[i : i + block_size]
-            batch_seqs = all_seq_ids[i : i + block_size]
-            
-            packed_batches.append(torch.tensor(batch_tokens))
-            packed_seq_ids.append(torch.tensor(batch_seqs))
-
-        print(f"Created {len(packed_batches)} packed blocks.")
-        return packed_batches, packed_seq_ids
+    # 2. Оптимизация: Конвертируем в один плоский тензор ОДИН РАЗ
+    all_token_tensor = torch.tensor(all_tokens, dtype=torch.long)
+    
+    # 3. Обрезаем лишнее
+    total_length = (len(all_token_tensor) // block_size) * block_size
+    all_token_tensor = all_token_tensor[:total_length]
+    
+    # 4. Используем view (или reshape), чтобы разбить на блоки без создания лишних копий
+    # Это создает "представление" (view), что работает мгновенно.
+    packed_batches = all_token_tensor.view(-1, block_size)
+    
+    print(f"Created {packed_batches.shape[0]} packed blocks.")
+    
+    # Если нужно вернуть именно список тензоров для DataLoader:
+    return list(packed_batches)
 
 class PackedDataset(torch.utils.data.Dataset):
     """Простой Dataset для выдачи пар (tokens, sequence_ids)"""
