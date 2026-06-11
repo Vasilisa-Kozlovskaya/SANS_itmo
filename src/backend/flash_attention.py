@@ -253,7 +253,7 @@ class FlashCausalAttention(torch.nn.Module):
         # Вектор D
         D = torch.sum(do.to(torch.float32) * out.to(torch.float32), dim=-1).view(B * H, N)
         
-        BLOCK_M, BLOCK_N = 64, 64
+        BLOCK_M, BLOCK_N = 32, 32
         grid = (triton.cdiv(N, BLOCK_N), B * H)
         
         # ИСПРАВЛЕНО: Теперь передаем ВСЕ параметры строго по сигнатуре, включая B (Z)
