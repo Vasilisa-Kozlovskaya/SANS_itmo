@@ -11,43 +11,35 @@ class GPTLightningModule(pl.LightningModule):
     """
     LightningModule для обучения GPT-like модели с поддержкой Packed Batching.
     """
-    def __init__(self, vocab_size: int, d_model: int, n_heads: int, d_ff: int, n_layers: int, max_len: int = 5000, dropout: float = 0.1):
+    def __init__(
+        self, 
+        vocab_size: int,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        n_layers: int,
+        lr: float = 3e-4,
+        weight_decay: float = 0.01,
+        warmup_steps: int = 200,
+        max_steps: int = 2000,
+        dropout: float = 0.1
+    ):
         super().__init__()
+        # Сохраняет все переданные аргументы в self.hparams
         self.save_hyperparameters()
-        self.token_embeddings = nn.Embedding(vocab_size, d_model)
-        self.pos_encoding = SinusoidalPositionalEncoding(d_model, max_len)
         
-        self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, n_heads, d_ff, dropout)
-            for _ in range(n_layers)
-        ])
+        # Инициализируем GPT-модель из задания 2.1
+        self.model = GPTLanguageModel(
+            vocab_size=vocab_size,
+            d_model=d_model,
+            n_heads=n_heads,
+            d_ff=d_ff,
+            n_layers=n_layers,
+            dropout=dropout
+        )
         
-        self.lm_head = LMHead(d_model, vocab_size)
-        self.dropout = nn.Dropout(dropout)
-        
-        self.lm_head.linear.weight = self.token_embeddings.weight
-        
-        # === ДОБАВЬ ЭТИ СТРОКИ В КОНЕЦ __init__ ===
-        # Применяем базовую инициализацию ко всем модулям
-        self.apply(self._init_weights)
+        # Базовый критерий для кросс-энтропии
         self.criterion = nn.CrossEntropyLoss()
-        
-        # Специальное масштабирование весов для слоев проекции после Attention и FFN
-        # Это предотвращает разгон дисперсии в остаточных связях (Residual Connections)
-        for name, p in self.named_parameters():
-            if name.endswith('out_linear.weight') or name.endswith('linear2.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.zeros_(module.bias)
-            torch.nn.init.ones_(module.weight)
 
     def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
         return self.model(x, sequence_ids)
