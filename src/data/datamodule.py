@@ -160,34 +160,28 @@ class WikiTextProcessing(CommonCrawlDataModule):
         
         print(f"WikiText processed. Remaining objects: {len(processed_data)}")
         return processed_data
-
-    def create_packed_batches(self, texts, block_size=512):
-    print(f"Starting Optimized Packed Batching (block size: {block_size})...")
     
-    eos_token_id = self.bpe_tokenizer.token_to_id("[SEP]") or 0
+    def generate_sequence_ids_fast(packed_batches, eos_token_id):
+        """Оптимизированная версия генерации ID последовательностей."""
+        packed_seq_ids = []
+        current_seq_id = 1
     
-    # 1. Используем генератор или map, чтобы избежать явных циклов Python, если возможно.
-    # Если токенизатор позволяет, лучше подавать весь текст списком, а не по одной строке.
-    all_tokens = []
-    for text in texts:
-        all_tokens.extend(self.bpe_tokenizer.encode(text))
-        all_tokens.append(eos_token_id)
-
-    # 2. Оптимизация: Конвертируем в один плоский тензор ОДИН РАЗ
-    all_token_tensor = torch.tensor(all_tokens, dtype=torch.long)
-    
-    # 3. Обрезаем лишнее
-    total_length = (len(all_token_tensor) // block_size) * block_size
-    all_token_tensor = all_token_tensor[:total_length]
-    
-    # 4. Используем view (или reshape), чтобы разбить на блоки без создания лишних копий
-    # Это создает "представление" (view), что работает мгновенно.
-    packed_batches = all_token_tensor.view(-1, block_size)
-    
-    print(f"Created {packed_batches.shape[0]} packed blocks.")
-    
-    # Если нужно вернуть именно список тензоров для DataLoader:
-    return list(packed_batches)
+        for batch in packed_batches:
+        # batch - это тензор
+        # Сравниваем токены с eos_token_id (получаем маску)
+        # .cumsum() создает нарастающую сумму, которая и будет нашими ID
+           is_eos = (batch == eos_token_id).long()
+        
+        # ID последовательности — это накопленная сумма разделителей
+           seq_ids = current_seq_id + torch.cumsum(is_eos, dim=0)
+        
+        # Если в конце блока был SEP, то следующий блок должен начаться 
+        # со следующего ID, поэтому обновляем current_seq_id
+           current_seq_id = seq_ids[-1] + (1 if batch[-1] == eos_token_id else 0)
+        
+           packed_seq_ids.append(seq_ids)
+        
+        return packed_seq_ids
 
 class PackedDataset(torch.utils.data.Dataset):
     """Простой Dataset для выдачи пар (tokens, sequence_ids)"""
