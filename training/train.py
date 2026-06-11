@@ -100,6 +100,8 @@ def main():
         # Обрезка градиентов по ГЛОБАЛЬНОЙ норме (Задание 2.3.3)
         gradient_clip_val=cfg.training.gradient_clip_val,
         gradient_clip_algorithm="norm",
+
+        accumulate_grad_batches=4, # 4 подбатча по 4 элемента = эффективный батч 16
         
         logger=tb_logger,
         callbacks=[checkpoint_callback, lr_monitor, grad_logger],
