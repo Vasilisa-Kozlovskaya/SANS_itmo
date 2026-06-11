@@ -165,7 +165,29 @@ class GPTLanguageModel(nn.Module):
         
         self.lm_head = LMHead(d_model, vocab_size)
         self.dropout = nn.Dropout(dropout)
+
+        self.lm_head.linear.weight = self.token_embeddings.weight
+
+        # Применяем базовую инициализацию ко всем модулям
+        self.apply(self._init_weights)
         
+        # Специальное масштабирование весов для слоев проекции после Attention и FFN
+        # Это предотвращает разгон дисперсии в остаточных связях (Residual Connections)
+        for name, p in self.named_parameters():
+            if name.endswith('out_linear.weight') or name.endswith('linear2.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
+    
     def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
         # Рассчитываем локальные позиционные индексы динамически по sequence_ids
         positions = compute_positions_vectorized(sequence_ids)
