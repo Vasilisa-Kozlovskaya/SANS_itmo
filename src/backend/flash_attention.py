@@ -198,7 +198,7 @@ class FlashAttentionFunction(torch.autograd.Function):
         # Он необходим для вычисления градиента софтмакса в Online-режиме
         D = torch.sum(do.to(torch.float32) * out.to(torch.float32), dim=-1).view(B * H, N)
         
-        BLOCK_M, BLOCK_N = 64, 64
+        BLOCK_M, BLOCK_N = 32, 32
         grid = (triton.cdiv(N, BLOCK_N), B * H)
         
         _flash_attn_bwd_kernel[grid](
