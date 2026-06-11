@@ -70,20 +70,19 @@ class GPTLightningModule(pl.LightningModule):
         self.log("train_ppl", train_ppl, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
-def validation_step(self, batch, batch_idx):
-    # Используем общий метод для расчета лосса — он теперь сам правильно 
-    # достанет токены и sequence_ids, а также передаст их в forward()
-    loss = self._shared_step(batch)
+    def validation_step(self, batch, batch_idx):
+        # Используем общий метод для расчета лосса — он теперь сам правильно 
+        # достанет токены и sequence_ids, а также передаст их в forward()
+        loss = self._shared_step(batch)
     
-    # Считаем перплексию (PPL) на валидации
-    val_ppl = torch.exp(loss)
+        # Считаем перплексию (PPL) на валидации
+        val_ppl = torch.exp(loss)
     
-    # Логируем метрики по эпохам (on_step=False)
-    self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-    self.log("val_ppl", val_ppl, on_step=False, on_epoch=True, prog_bar=True)
+        # Логируем метрики по эпохам (on_step=False)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_ppl", val_ppl, on_step=False, on_epoch=True, prog_bar=True)
     
-    return loss
-
+        return loss
 
     def configure_optimizers(self):
         """
