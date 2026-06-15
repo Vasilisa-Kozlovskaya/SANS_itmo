@@ -46,42 +46,36 @@ class GPTLightningModule(pl.LightningModule):
 
     def _shared_step(self, batch):
         """Вспомогательный метод для распаковки батча и расчета loss."""
-        # Распаковываем батч (наш PackedDataset возвращает кортеж из двух элементов)
+        # Адаптируйте под формат вашего Dataset/DataModule из ЛР1
         if isinstance(batch, dict):
             tokens = batch["tokens"]
             sequence_ids = batch["sequence_ids"]
         else:
             tokens, sequence_ids = batch
+            
+        # Прямой проход модели (получаем логиты для ВСЕХ токенов в packed batch)
+        logits = self(tokens, sequence_ids)
         
-        # Прямой проход модели (передаем ОБА обязательных аргумента)
-        logits = self(tokens, sequence_ids=sequence_ids)
-    
         # Расчет специализированного лосса, который маскирует паддинги и стыки
         loss = compute_packed_loss(logits, tokens, sequence_ids, self.criterion)
         return loss
 
     def training_step(self, batch, batch_idx):
         loss = self._shared_step(batch)
-        # Считаем перплексию (PPL)
-        train_ppl = torch.exp(loss)
         
         # Логируем loss на каждом шаге и средний за эпоху
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log("train_ppl", train_ppl, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        # Используем общий метод для расчета лосса — он теперь сам правильно 
-        # достанет токены и sequence_ids, а также передаст их в forward()
         loss = self._shared_step(batch)
-    
-        # Считаем перплексию (PPL) на валидации
-        val_ppl = torch.exp(loss)
-    
-        # Логируем метрики по эпохам (on_step=False)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_ppl", val_ppl, on_step=False, on_epoch=True, prog_bar=True)
-    
+        
+        # Расчет перплексии (Perplexity): PPL = exp(Loss)
+        perplexity = torch.exp(loss)
+        
+        # Логируем валидационные метрики
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_perplexity", perplexity, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def configure_optimizers(self):
