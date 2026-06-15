@@ -1,41 +1,18 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-def compute_positions_vectorized(sequence_ids: torch.Tensor) -> torch.Tensor:
+class PackedSinusoidalPositionalEncoding(nn.Module):
     """
-    Векторизованное вычисление локальных позиций токенов внутри packed batch.
-    Пример: [1, 1, 1, 2, 2, 0] -> [0, 1, 2, 0, 1, 0]
+    Модуль синусоидального позиционного кодирования, адаптированный под Packed Batching.
+    Позиции вычисляются локально для каждой подпоследовательности.
     """
-    B, T = sequence_ids.shape
-    
-    # Определяем, совпадает ли текущий id последовательности с предыдущим
-    same_as_prev = (sequence_ids[:, 1:] == sequence_ids[:, :-1]) & (sequence_ids[:, 1:] != 0)
-    same_as_prev = torch.cat([torch.zeros((B, 1), dtype=torch.bool, device=sequence_ids.device), same_as_prev], dim=1)
-    
-    # Позиции начала новых подпоследовательностей
-    starts = ~same_as_prev
-    
-    # Генерируем базовую матрицу индексов [[0, 1, 2, ...]]
-    indices = torch.arange(T, device=sequence_ids.device).unsqueeze(0).expand(B, T)
-    
-    # Оставляем индексы только там, где начинаются новые последовательности
-    start_indices = torch.where(starts, indices, torch.zeros_like(indices))
-    
-    # Находим индекс старта текущей подпоследовательности через кумулятивный максимум
-    latest_start_indices = torch.cummax(start_indices, dim=1)[0]
-    
-    # Локальная позиция — это смещение от начала текущей подпоследовательности
-    positions = indices - latest_start_indices
-    
-    # Зануляем позиции для паддингов (id == 0)
-    return positions * (sequence_ids != 0).long()
-
-
-class SinusoidalPositionalEncoding(nn.Module):
-    """Модуль синусоидального позиционного кодирования."""
-    def __init__(self, d_model: int, max_len: int = 5000):
+    def __init__(self, d_model: int, max_len: int = 1024):
         super().__init__()
+        self.d_model = d_model
+        
+        # Генерация статической матрицы позиционных эмбеддингов
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -43,206 +20,170 @@ class SinusoidalPositionalEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         
-        # register_buffer сохраняет состояние, но не делает тензор обучаемым параметром
+        # Регистрируем как буфер, чтобы тензор не обновлялся градиентами, но переносился на GPU
         self.register_buffer('pe', pe)
+
+    def forward(self, sequence_ids: torch.Tensor) -> torch.Tensor:
+        """
+        sequence_ids: (batch_size, seq_len) — ID исходных последовательностей (например, [1, 1, 2, 2, 2, 0])
+        """
+        B, T = sequence_ids.shape
         
-    def forward(self, positions: torch.Tensor) -> torch.Tensor:
-        # positions: (B, T)
-        # Выход: (B, T, d_model)
+        # Вычисляем локальные позиции внутри упакованного батча динамически
+        s_i = sequence_ids.unsqueeze(2)  # (B, T, 1)
+        s_j = sequence_ids.unsqueeze(1)  # (B, 1, T)
+        tril = torch.tril(torch.ones(T, T, device=sequence_ids.device)).bool()
+        
+        # Токен принадлежит той же подпоследовательности и находится левее/равно текущему
+        mask = (s_i == s_j) & tril & (s_i != 0)
+        
+        # Локальная позиция — это количество предшествующих токенов той же сессии минус 1
+        positions = mask.sum(dim=-1) - 1
+        positions = torch.clamp(positions, min=0)  # Убираем -1 для паддингов (id=0)
+        
+        # Выбираем эмбеддинги с помощью advanced indexing: (B, T) -> (B, T, d_model)
         return self.pe[positions]
 
 
 class BlockMaskedMultiHeadAttention(nn.Module):
-    """Модуль многоглавого маскированного внимания (Block-Masked Attention)."""
-    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+    """
+    Модуль многоглавого маскированного внимания (Block-Masked Attention)
+    """
+    def __init__(self, d_model: int, num_heads: int):
         super().__init__()
-        assert d_model % n_heads == 0, "d_model должно делиться на n_heads"
+        assert d_model % num_heads == 0, "d_model должен делиться на num_heads"
         
         self.d_model = d_model
-        self.n_heads = n_heads
-        self.d_k = d_model // n_heads
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
         
         self.q_linear = nn.Linear(d_model, d_model)
         self.k_linear = nn.Linear(d_model, d_model)
         self.v_linear = nn.Linear(d_model, d_model)
         self.out_linear = nn.Linear(d_model, d_model)
-        
-        self.dropout = nn.Dropout(dropout)
-        
+
     def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, d_model), sequence_ids: (B, T)
-        B, T, _ = x.shape
+        B, T, C = x.shape
         
-        # Проекции Q, K, V и разделение на головы: (B, n_heads, T, d_k)
-        q = self.q_linear(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
-        k = self.k_linear(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
-        v = self.v_linear(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
+        # Проекции Q, K, V и разделение на головы
+        q = self.q_linear(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)  # (B, num_heads, T, d_k)
+        k = self.k_linear(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
+        v = self.v_linear(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
         
         # Расчет скалярного произведения (scores)
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k) # (B, n_heads, T, T)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
         
-        # Создание Block-Mask
-        # 1. Проверяем принадлежность к одному объекту (s_i == s_j)
-        same_seq = (sequence_ids.unsqueeze(-1) == sequence_ids.unsqueeze(-2)) # (B, T, T)
-        # 2. Применяем классическую причинно-следственную казуальную маску (j <= i)
-        causal_mask = torch.tril(torch.ones((T, T), dtype=torch.bool, device=x.device)) # (T, T)
-        # 3. Исключаем паддинг (s_i != 0)
-        not_pad = (sequence_ids.unsqueeze(-1) != 0) # (B, T, 1)
+        # Построение Block-Masked Attention
+        s_i = sequence_ids.unsqueeze(2)  # (B, T, 1)
+        s_j = sequence_ids.unsqueeze(1)  # (B, 1, T)
+        tril = torch.tril(torch.ones(T, T, device=x.device)).bool()
         
-        # Результирующая блок-маска
-        block_mask = same_seq & causal_mask & not_pad # (B, T, T)
-        block_mask = block_mask.unsqueeze(1) # Добавляем размерность для голов: (B, 1, T, T)
+        # Формула: (M)_{i,j} = (s_i == s_j) & (j <= i) & (s_i != 0)
+        block_mask = (s_i == s_j) & tril & (s_i != 0)
+        block_mask = block_mask.unsqueeze(1)  # Добавляем размерность для голов: (B, 1, T, T)
         
-        # Заполняем запрещенные переходы -inf
+        # Заполняем запрещенные связи минус бесконечностью
         scores = scores.masked_fill(~block_mask, float('-inf'))
         
-        # Softmax + Dropout
-        attn_probs = torch.softmax(scores, dim=-1)
-        # Защита от NaN, если вся строка оказалась замаскирована (например, сплошной паддинг)
-        attn_probs = torch.nan_to_num(attn_probs, nan=0.0)
-        attn_probs = self.dropout(attn_probs)
+        # Softmax по последней размерности
+        attn_weights = F.softmax(scores, dim=-1)
         
-        # Взвешенное суммирование и объединение голов обратно
-        context = torch.matmul(attn_probs, v) # (B, n_heads, T, d_k)
-        context = context.transpose(1, 2).contiguous().view(B, T, self.d_model)
+        # Защита от NaN, если в батче есть строки, целиком состоящие из PAD (0)
+        attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
+        
+        # Взвешенное суммирование значений V
+        context = torch.matmul(attn_weights, v)
+        context = context.transpose(1, 2).contiguous().view(B, T, C)
         
         return self.out_linear(context)
 
 
-class FeedForward(nn.Module):
-    """FFN-модуль."""
-    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
+class PositionWiseFeedForward(nn.Module):
+    """
+    Стандартный FFN-модуль трансформера
+    """
+    def __init__(self, d_model: int, d_ff: int):
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff)
-        self.dropout = nn.Dropout(dropout)
+        self.activation = nn.GELU()  # Стандарт для GPT-моделей
         self.linear2 = nn.Linear(d_ff, d_model)
-        self.act = nn.GELU() # Стандарт для GPT архитектур
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear2(self.dropout(self.act(self.linear1(x))))
+        return self.linear2(self.activation(self.linear1(x)))
 
 
-class TransformerBlock(nn.Module):
-    """Слой-трансформера с применением Post-Norm нормализации."""
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1):
+class TransformerLayer(nn.Module):
+    """
+    Слой трансформера с использованием жесткого Post-Norm варианта нормализации
+    """
+    def __init__(self, d_model: int, num_heads: int, d_ff: int):
         super().__init__()
-        self.attn = BlockMaskedMultiHeadAttention(d_model, n_heads, dropout)
-        self.ffn = FeedForward(d_model, d_ff, dropout)
+        self.attn = BlockMaskedMultiHeadAttention(d_model, num_heads)
+        self.ffn = PositionWiseFeedForward(d_model, d_ff)
         self.ln1 = nn.LayerNorm(d_model)
         self.ln2 = nn.LayerNorm(d_model)
-        
+
     def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
-        # Реализация Post-Norm варианта:
-        # z1 = LayerNorm(x + Attention(x))
-        # z2 = LayerNorm(z1 + FFN(z1))
+        # z1 = LayerNorm(z + Attention(z))
         z1 = self.ln1(x + self.attn(x, sequence_ids))
+        # z2 = LayerNorm(z1 + FFN(z1))
         z2 = self.ln2(z1 + self.ffn(z1))
         return z2
 
 
-class LMHead(nn.Module):
-    """Модуль LM-head для получения логитов."""
-    def __init__(self, d_model: int, vocab_size: int):
+class GPTLikeModel(nn.Module):
+    """
+    Основной класс GPT-like модели с маскированием функции потерь под Packed Batching
+    """
+    def __init__(self, vocab_size: int, d_model: int, num_heads: int, d_ff: int, num_layers: int, max_len: int = 1024):
         super().__init__()
-        self.linear = nn.Linear(d_model, vocab_size)
+        self.token_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_enc = PackedSinusoidalPositionalEncoding(d_model, max_len)
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Возвращаем «сырые» логиты без Softmax
-        return self.linear(x)
-
-
-class GPTLanguageModel(nn.Module):
-    """Полная GPT-like модель, объединяющая все блоки."""
-    def __init__(self, vocab_size: int, d_model: int, n_heads: int, d_ff: int, n_layers: int, max_len: int = 5000, dropout: float = 0.1):
-        super().__init__()
-        self.token_embeddings = nn.Embedding(vocab_size, d_model)
-        self.pos_encoding = SinusoidalPositionalEncoding(d_model, max_len)
-        
-        self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, n_heads, d_ff, dropout)
-            for _ in range(n_layers)
+        self.layers = nn.ModuleList([
+            TransformerLayer(d_model, num_heads, d_ff) for _ in range(num_layers)
         ])
         
-        self.lm_head = LMHead(d_model, vocab_size)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
-        # Рассчитываем локальные позиционные индексы динамически по sequence_ids
-        positions = compute_positions_vectorized(sequence_ids)
-        
-        # Эмбеддинги токенов + позиционные эмбеддинги
-        out = self.dropout(self.token_embeddings(x) + self.pos_encoding(positions))
-        
-        # Прогон через стек слоев трансформера
-        for block in self.blocks:
-            out = block(out, sequence_ids)
-            
-        # Логиты
-        return self.lm_head(out)
+        # LM-head для получения сырых логитов (без повторного применения Softmax!)
+        self.lm_head = nn.Linear(d_model, vocab_size)
 
-    @torch.no_grad()
-    def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = None) -> torch.Tensor:
-        """
-        Авторегрессионная генерация текста (Inference).
-        idx: тензор начальных токенов (затравка) размера (B, T)
-        max_new_tokens: сколько токенов сгенерировать суммарно
-        temperature: контролирует случайность (чем выше, тем разнообразнее текст)
-        top_k: ограничение выборки только K лучшими токенами (для качества)
-        """
-        self.eval() # Переводим модель в режим оценки
+    def forward(self, tokens: torch.Tensor, sequence_ids: torch.Tensor, targets: torch.Tensor = None):
+        # Эмбеддинги токенов + кастомные позиционные эмбеддинги
+        x = self.token_emb(tokens) + self.pos_enc(sequence_ids)
         
-        for _ in range(max_new_tokens):
-            # Во время генерации одного текста все токены принадлежат одной последовательности (id = 1)
-            sequence_ids = torch.ones_like(idx, device=idx.device)
+        # Прогон сквозь слои трансформера
+        for layer in self.layers:
+            x = layer(x, sequence_ids)
             
-            # Если длина превышает max_len, обрезаем контекст слева
-            # (ограничение синусоидального позиционного кодирования)
-            max_pos = self.pos_encoding.pe.size(0)
-            idx_cond = idx if idx.size(1) <= max_pos else idx[:, -max_pos:]
-            sequence_ids_cond = sequence_ids[:, :idx_cond.size(1)]
+        logits = self.lm_head(x)  # (B, T, vocab_size)
+        
+        loss = None
+        if targets is not None:
+            # Сдвиг логитов и таргетов для классической авторегрессионной задачи предсказания
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_targets = targets[:, 1:].contiguous()
             
-            # Получаем логиты модели
-            logits = self(idx_cond, sequence_ids_cond) # (B, T, vocab_size)
+            # Сдвиг ID последовательностей для корректного маскирования стыков
+            shift_seq_ids = sequence_ids[:, :-1].contiguous()
+            next_seq_ids = sequence_ids[:, 1:].contiguous()
             
-            # Нас интересует предсказание только для самого последнего токена
-            logits = logits[:, -1, :] / temperature # (B, vocab_size)
+            # Формула маски лосса: M_i^{loss} = (s_i == s_{i+1}) & (s_i != 0)
+            loss_mask = (shift_seq_ids == next_seq_ids) & (shift_seq_ids != 0)
             
-            # Опционально: применение Top-K фильтрации
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = float('-inf')
+            # Вычисляем cross-entropy поэлементно (reduction='none')
+            loss_fn = nn.CrossEntropyLoss(reduction='none')
+            flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+            flat_targets = shift_targets.view(-1)
+            
+            raw_loss = loss_fn(flat_logits, flat_targets).view(shift_targets.shape)
+            
+            # Обнуляем лосс на границах разных текстов и на паддингах
+            masked_loss = raw_loss * loss_mask.float()
+            
+            # Усредняем ошибку исключительно по тем позициям, где маска равна 1
+            if loss_mask.sum() > 0:
+                loss = masked_loss.sum() / loss_mask.sum()
+            else:
+                loss = masked_loss.sum()
                 
-            # Превращаем логиты в вероятности
-            probs = torch.softmax(logits, dim=-1)
-            
-            # Сэмплируем следующий токен
-            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
-            
-            # Добавляем сгенерированный токен в общий контекст
-            idx = torch.cat((idx, idx_next), dim=1)
-            
-        return idx
-
-
-def compute_packed_loss(logits: torch.Tensor, targets: torch.Tensor, sequence_ids: torch.Tensor, criterion: nn.Module) -> torch.Tensor:
-    """
-    Расчет функции потерь с маскированием стыков и паддингов при packed batching.
-    """
-    # Вычисляем маску для loss: M_i = (s_i == s_{i+1}) & (s_i != 0)
-    s_i = sequence_ids[:, :-1]
-    s_next = sequence_ids[:, 1:]
-    loss_mask = (s_i == s_next) & (s_i != 0)
-    
-    # Сдвигаем логиты и таргеты для авторегрессионного предсказания (следующий токен)
-    active_logits = logits[:, :-1, :].reshape(-1, logits.size(-1))
-    active_targets = targets[:, 1:].reshape(-1)
-    flat_mask = loss_mask.reshape(-1)
-    
-    # Фильтруем только валидные переходы внутри одной подпоследовательности
-    filtered_logits = active_logits[flat_mask]
-    filtered_targets = active_targets[flat_mask]
-    
-    if filtered_logits.numel() == 0:
-        return torch.tensor(0.0, device=logits.device, requires_grad=True)
-        
-    return criterion(filtered_logits, filtered_targets)
+        return logits, loss
