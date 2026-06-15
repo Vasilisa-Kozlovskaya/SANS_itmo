@@ -9,7 +9,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
 # Импортируем созданный ранее LightningModule
 from src.training.lightning_module import GPTLightningModule
-from src.data.datamodule import PackedDataModule 
+# Предполагается, что здесь импортируется ваш DataModule из ЛР1
+# from src.data.datamodule import PackedDataModule 
 
 
 class GradNormLoggerCallback(pl.Callback):
@@ -90,8 +91,8 @@ def main():
         max_steps=cfg.training.max_steps
     )
     
-    # Инициализфция DataModule, созданный в ЛР1
-    datamodule = PackedDataModule(batch_size=cfg.training.batch_size)
+    # Инициализируйте ваш DataModule, созданный в ЛР1
+    # datamodule = PackedDataModule(batch_size=cfg.training.batch_size)
     
     # 7. Конфигурируем PyTorch Lightning Trainer
     trainer = pl.Trainer(
@@ -100,8 +101,6 @@ def main():
         # Обрезка градиентов по ГЛОБАЛЬНОЙ норме (Задание 2.3.3)
         gradient_clip_val=cfg.training.gradient_clip_val,
         gradient_clip_algorithm="norm",
-
-        accumulate_grad_batches=4, # 4 подбатча по 4 элемента = эффективный батч 16
         
         logger=tb_logger,
         callbacks=[checkpoint_callback, lr_monitor, grad_logger],
@@ -124,7 +123,7 @@ def main():
         print(" Запуск обучения с нулевой итерации.")
 
     # 9. Запуск цикла обучения и валидации
-    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path_to_load)
+    # trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path_to_load)
     print(" Инфраструктура успешно инициализирована и готова к запуску!")
 
 
