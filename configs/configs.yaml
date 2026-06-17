@@ -1,14 +1,14 @@
 # configs/config.yaml
 model:
   vocab_size: 50257      # Размер словаря (из ЛР1)
-  d_model: 512
-  n_heads: 8
-  d_ff: 2084
-  n_layers: 10
+  d_model: 768
+  n_heads: 12
+  d_ff: 3072
+  n_layers: 12
   dropout: 0.1
 
 training:
-  lr: 3e-4
+  lr: 2.5e-4
   weight_decay: 0.01
   warmup_steps: 1000
   max_steps: 12000
