@@ -108,6 +108,72 @@ class BlockMaskedMultiHeadAttention(nn.Module):
         
         return self.out_linear(context)
 
+class BlockMaskedGQA(nn.Module):
+    """
+    Модуль Grouped-Query Attention (GQA) с поддержкой Block-Masked для Packed Batching.
+    """
+    def __init__(self, d_model: int, num_heads: int, num_groups: int):
+        super().__init__()
+        assert d_model % num_heads == 0, "d_model должен делиться на num_heads"
+        assert num_heads % num_groups == 0, "Количество голов должно нацело делиться на количество групп"
+        
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.num_groups = num_groups
+        self.d_k = d_model // num_heads
+        
+        # Количество KV-голов на одну группу (обычно 1 KV-голова на группу)
+        self.num_kv_heads = num_groups 
+        # Сколько Q-голов приходится на одну KV-голову
+        self.queries_per_kv = num_heads // num_groups
+
+        # Линейные проекции: Q проецируется в d_model, а K и V — в уменьшенное пространство
+        self.q_linear = nn.Linear(d_model, d_model)
+        self.k_linear = nn.Linear(d_model, self.num_kv_heads * self.d_k)
+        self.v_linear = nn.Linear(d_model, self.num_kv_heads * self.d_k)
+        
+        self.out_linear = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        
+        # 1. Проекции и изменение формы
+        # Q: (B, num_heads, T, d_k)
+        q = self.q_linear(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
+        
+        # K и V: (B, num_kv_heads, T, d_k)
+        k = self.k_linear(x).view(B, T, self.num_kv_heads, self.d_k).transpose(1, 2)
+        v = self.v_linear(x).view(B, T, self.num_kv_heads, self.d_k).transpose(1, 2)
+        
+        # 2. Повторение (Broadcasting) KV голов для соответствия Q головам в GQA
+        # Превращаем (B, num_kv_heads, T, d_k) -> (B, num_heads, T, d_k)
+        k = torch.repeat_interleave(k, repeats=self.queries_per_kv, dim=1)
+        v = torch.repeat_interleave(v, repeats=self.queries_per_kv, dim=1)
+        
+        # 3. Расчет скалярного произведения (scores)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        
+        # 4. Построение и наложение Block-Masked Attention (из вашего ЛР2/ЛР3)
+        s_i = sequence_ids.unsqueeze(2)  # (B, T, 1)
+        s_j = sequence_ids.unsqueeze(1)  # (B, 1, T)
+        tril = torch.tril(torch.ones(T, T, device=x.device)).bool()
+        
+        block_mask = (s_i == s_j) & tril & (s_i != 0)
+        block_mask = block_mask.unsqueeze(1)  # (B, 1, T, T) для общего применения по головам
+        
+        # Маскируем запрещенные связи
+        scores = scores.masked_fill(~block_mask, float('-inf'))
+        
+        # Softmax по ключам
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
+        
+        # 5. Сборка контекста
+        context = torch.matmul(attn_weights, v)  # (B, num_heads, T, d_k)
+        context = context.transpose(1, 2).contiguous().view(B, T, C)
+        
+        return self.out_linear(context)
+
 
 class FeedForward(nn.Module):
     """FFN-модуль."""
@@ -122,22 +188,20 @@ class FeedForward(nn.Module):
         return self.linear2(self.dropout(self.act(self.linear1(x))))
 
 
-class TransformerBlock(nn.Module):
-    """Слой-трансформера с применением Post-Norm нормализации."""
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1):
+class TransformerLayer(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, num_groups: int, d_ff: int):
         super().__init__()
-        self.attn = BlockMaskedMultiHeadAttention(d_model, n_heads, dropout)
-        self.ffn = FeedForward(d_model, d_ff, dropout)
+        # Используем GQA вместо стандартного MHA
+        self.attn = BlockMaskedGQA(d_model, num_heads, num_groups)
+        self.ffn = PositionWiseFeedForward(d_model, d_ff)
         self.ln1 = nn.LayerNorm(d_model)
         self.ln2 = nn.LayerNorm(d_model)
-        
+
     def forward(self, x: torch.Tensor, sequence_ids: torch.Tensor) -> torch.Tensor:
-        # Реализация Post-Norm варианта:
-        # z1 = LayerNorm(x + Attention(x))
-        # z2 = LayerNorm(z1 + FFN(z1))
         z1 = self.ln1(x + self.attn(x, sequence_ids))
         z2 = self.ln2(z1 + self.ffn(z1))
         return z2
+
 
 
 class LMHead(nn.Module):
@@ -157,11 +221,12 @@ class GPTLanguageModel(nn.Module):
         super().__init__()
         self.token_embeddings = nn.Embedding(vocab_size, d_model)
         self.pos_encoding = SinusoidalPositionalEncoding(d_model, max_len)
-        
-        self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, n_heads, d_ff, dropout)
-            for _ in range(n_layers)
+
+        # В __init__ класса GPTLikeModel добавьте num_groups:
+        self.layers = nn.ModuleList([
+             TransformerLayer(d_model, num_heads, num_groups, d_ff) for _ in range(num_layers)
         ])
+
         
         self.lm_head = LMHead(d_model, vocab_size)
         self.dropout = nn.Dropout(dropout)
