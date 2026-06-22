@@ -69,3 +69,42 @@ class CommonCrawlDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+    
+import torch
+from torch.utils.data import Dataset
+
+class PackedDataset(Dataset):
+    def __init__(self, token_ids, block_size=512):
+        """
+        token_ids: огромный плоский список всех токенов датасета.
+        block_size: длина последовательности для обучения (512).
+        """
+        # Считаем количество полных блоков
+        n_blocks = len(token_ids) // block_size
+        
+        # Обрезаем лишнее, чтобы данные делились ровно на блоки
+        self.data = torch.tensor(token_ids[:n_blocks * block_size], dtype=torch.long)
+        self.block_size = block_size
+        self.n_blocks = n_blocks
+
+    def __len__(self):
+        return self.n_blocks
+
+    def __getitem__(self, idx):
+        # Берем кусок длиной block_size
+        start_idx = idx * self.block_size
+        end_idx = start_idx + self.block_size
+        block = self.data[start_idx:end_idx]
+        return block
+
+def pack_tokens(tokenizer, texts, block_size=512):
+    """Превращает список текстов в один гигантский список токенов."""
+    all_tokens = []
+    for text in texts:
+        # Эффективно добавляем токены и символ конца текста (если есть в токенезаторе)
+        tokens = tokenizer.encode(text)
+        all_tokens.extend(tokens)
+        # Опционально: добавляем ID токена <eos> (end of sentence), если он есть
+        # all_tokens.append(tokenizer.tokenizer.token_to_id("</s>"))
+    
+    return all_tokens
