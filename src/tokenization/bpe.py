@@ -1,41 +1,46 @@
-from tokenizers import ByteLevelBPETokenizer
+import sys
 import os
+import random
 
-class BpeTokenizer:
-    def __init__(self, vocab_size=30000):
-        self.tokenizer = ByteLevelBPETokenizer()
-        self.vocab_size_limit = vocab_size
+# Установка зависимости для BPE
+!pip install tokenizers
 
-    def train_from_file(self, file_path):
-        """Обучает BPE на текстовом файле."""
-        self.tokenizer.train(
-            files=[file_path], 
-            vocab_size=self.vocab_size_limit, 
-            min_frequency=2,
-            special_tokens=["<s>", "<pad>", "</s>", "<unk>", "<mask>"]
-        )
+sys.path.append(os.path.abspath('./src'))
+from tokenization.char_word import CharTokenizer, WordTokenizer
+from tokenization.bpe import BpeTokenizer
 
-    def save(self, folder_path):
-        """Сохраняет файлы токенизатора (vocab.json и merges.txt)."""
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-        self.tokenizer.save_model(folder_path)
-        print(f"Токенизатор успешно сохранен в: {folder_path}")
+# 1. Загрузка данных
+with open("data/final_filtered_text.txt", "r", encoding="utf-8") as f:
+    texts = [line.strip() for line in f if line.strip()]
 
-    def load(self, folder_path):
-        """Загружает предобученный токенизатор из папки."""
-        self.tokenizer = ByteLevelBPETokenizer.from_file(
-            f"{folder_path}/vocab.json", 
-            f"{folder_path}/merges.txt"
-        )
-        print(f"Токенизатор загружен. Размер словаря: {self.vocab_size}")
+random_sample = random.choice(texts)
+print(f"Случайный объект для теста:\n{random_sample[:200]}...")
 
-    def encode(self, text):
-        return self.tokenizer.encode(text).ids
+# --- СИМВОЛЬНАЯ ТОКЕНИЗАЦИЯ ---
+char_tok = CharTokenizer()
+char_tok.train(texts)
+char_encoded = char_tok.encode(random_sample)
+print(f"\n[Char Tokenizer]")
+print(f"Размер словаря: {char_tok.vocab_size}")
+print(f"Длина последовательности: {len(char_encoded)}")
 
-    def decode(self, ids):
-        return self.tokenizer.decode(ids)
+# --- СЛОВНАЯ ТОКЕНИЗАЦИЯ ---
+# Используем часть данных для обучения, если памяти мало
+word_tok = WordTokenizer(max_vocab_size=30000)
+word_tok.train(texts[:10000]) # Обучаем на подмножестве для скорости
+word_encoded = word_tok.encode(random_sample)
+print(f"\n[Word Tokenizer]")
+print(f"Размер словаря: {word_tok.vocab_size}")
+print(f"Длина последовательности: {len(word_encoded)}")
 
-    @property
-    def vocab_size(self):
-        return self.tokenizer.get_vocab_size()
+# --- BPE ТОКЕНИЗАЦИЯ ---
+bpe_tok = BpeTokenizer(vocab_size=30000)
+# BPE обучается прямо из файла
+bpe_tok.train_from_file("data/final_filtered_text.txt")
+bpe_encoded = bpe_tok.encode(random_sample)
+print(f"\n[BPE Tokenizer]")
+print(f"Размер словаря: {bpe_tok.vocab_size}")
+print(f"Длина последовательности: {len(bpe_encoded)}")
+
+# Сохраним BPE для следующих лабораторных
+bpe_tok.save("checkpoints/tokenizer_bpe")
