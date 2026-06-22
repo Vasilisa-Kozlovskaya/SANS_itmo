@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
-from data.processing import clean_html_and_headers, normalize_text, is_target_language, split_into_chunks
+from src.data.processing import clean_html_and_headers, normalize_text, is_target_language, split_into_chunks
 
 class TextDataset(Dataset):
     def __init__(self, texts):
