@@ -70,3 +70,13 @@ def split_into_chunks(text: str, max_chars=512*4) -> list:
     # В ЛР1 сказано обучать на 512, обычно это токены. 
     # Приблизительно 1 токен ~ 4 символа.
     return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+
+def remove_duplicates(texts: list) -> list:
+    """Удаляет дубликаты из списка строк, сохраняя порядок."""
+    seen = set()
+    unique_texts = []
+    for item in texts:
+        if item not in seen:
+            unique_texts.append(item)
+            seen.add(item)
+    return unique_texts
