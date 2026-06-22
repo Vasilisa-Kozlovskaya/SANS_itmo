@@ -12,6 +12,10 @@ class BpeTokenizer:
 
     def encode(self, text):
         return self.tokenizer.encode(text).ids
+    
+    def decode(self, ids):
+    # Библиотека автоматически склеивает subwords обратно в слова
+        return self.tokenizer.decode(ids)
 
     @property
     def vocab_size(self):
