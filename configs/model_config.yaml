@@ -1,0 +1,15 @@
+model:
+  vocab_size: 30000
+  n_embd: 384
+  n_layer: 6
+  n_head: 6
+  block_size: 512
+  dropout: 0.1
+
+training:
+  batch_size: 16
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  warmup_steps: 500
+  max_epochs: 10
+  gradient_clip_val: 1.0
