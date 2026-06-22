@@ -3,6 +3,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from models.layers import SinusoidalPositionalEncoding, TransformerBlock
 import math
+from src.training.scheduler import get_cosine_schedule_with_warmup
 
 class GPT(pl.LightningModule):
     def __init__(self, config):
@@ -80,23 +81,26 @@ class GPT(pl.LightningModule):
             self.parameters(), 
             lr=self.config.training.learning_rate, 
             weight_decay=self.config.training.weight_decay
-        )
-        
-        # Реализация Linear Warm-up
-        def lr_lambda(current_step: int):
-            if current_step < self.config.training.warmup_steps:
-                return float(current_step) / float(max(1, self.config.training.warmup_steps))
-            return 1.0
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-        
+       )
+    
+    # Рассчитываем общее количество шагов обучения (нужно для планировщика)
+    # Эти данные мы подтянем из трейнера позже или зададим примерно
+        total_steps = self.trainer.estimated_stepping_batches
+    
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=self.config.training.warmup_steps, 
+            num_training_steps=total_steps
+       )
+    
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
-            },
-        }
+                "interval": "step", # Обновлять LR каждый шаг, а не каждую эпоху
+                },
+        }  
+    
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0):
