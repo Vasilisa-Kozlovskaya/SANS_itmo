@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from models.layers import SinusoidalPositionalEncoding, TransformerBlock
+from src.models.layers import SinusoidalPositionalEncoding, TransformerBlock
 import math
 from src.training.scheduler import get_cosine_schedule_with_warmup
 
