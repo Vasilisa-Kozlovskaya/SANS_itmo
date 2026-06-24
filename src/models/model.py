@@ -111,7 +111,7 @@ class GPT(pl.LightningModule):
     
     # Рассчитываем общее количество шагов обучения (нужно для планировщика)
     # Эти данные мы подтянем из трейнера позже или зададим примерно
-        total_steps = self.config.training.get('total_steps', 10000)
+        total_steps = 10000
         
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
