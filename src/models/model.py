@@ -78,7 +78,15 @@ class GPT(pl.LightningModule):
         logits = self(idx)
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        # Логируем значения логитов для мониторинга стабильности
+        # Мы делаем .detach(), чтобы не нагружать граф градиентов
+        self.log('logits_max', logits.detach().max(), on_step=True, on_epoch=False)
+        self.log('logits_min', logits.detach().min(), on_step=True, on_epoch=False)
+        
+        # Логируем Loss и PPL
+        self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('train_perplexity', torch.exp(loss.detach()), on_step=False, on_epoch=True)
+       
         return loss
 
     def validation_step(self, batch, batch_idx):
