@@ -105,14 +105,14 @@ class GPT(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(), 
-            lr=self.config.training.learning_rate, 
-            weight_decay=self.config.training.weight_decay
+            lr=5e-4, 
+            weight_decay=0.1
        )
     
     # Рассчитываем общее количество шагов обучения (нужно для планировщика)
     # Эти данные мы подтянем из трейнера позже или зададим примерно
         steps_per_epoch = len(self.trainer.train_dataloader)
-        total_steps = steps_per_epoch * self.config.training.max_epochs
+        total_steps = self.config.training.get('total_steps', 10000)
         
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
