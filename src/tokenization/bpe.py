@@ -2,7 +2,7 @@ from tokenizers import ByteLevelBPETokenizer
 import os
 
 class BpeTokenizer:
-    def __init__(self, vocab_size=30000):
+    def __init__(self, vocab_size=8000):
         self.tokenizer = ByteLevelBPETokenizer()
         self.vocab_size_limit = vocab_size
 
