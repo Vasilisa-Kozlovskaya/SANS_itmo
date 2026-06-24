@@ -15,7 +15,6 @@ class GPT(pl.LightningModule):
         self.token_embedding = nn.Embedding(config.model.vocab_size, config.model.n_embd)
         self.pos_encoding = SinusoidalPositionalEncoding(config.model.n_embd, config.model.block_size)
         self.dropout = nn.Dropout(config.model.dropout)
-        self.apply(self._init_weights)
 
         # Стек слоев трансформера
         self.blocks = nn.Sequential(*[
@@ -34,7 +33,25 @@ class GPT(pl.LightningModule):
         # Веса lm_head и token_embedding обычно связывают (weight tying)
         self.token_embedding.weight = self.lm_head.weight
 
+        self.apply(self._init_weights)
+
         self.criterion = nn.CrossEntropyLoss()
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            # нормальное распределение с std=0.02
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            
+        # Специфика для Post-Norm (масштабирование весов проекционных слоев)
+        # Это помогает стабилизировать глубокие сети
+        for name, child in module.named_children():
+            if name in ['proj', 'mlp']: # слои, которые стоят в конце остаточных связей
+                if isinstance(child, nn.Linear):
+                    torch.nn.init.normal_(child.weight, mean=0.0, std=0.02 / math.sqrt(2 * self.config.model.n_layer))
 
     def forward(self, idx):
         B, T = idx.size()
@@ -118,13 +135,3 @@ class GPT(pl.LightningModule):
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
     
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.zeros_(module.bias)
-            torch.nn.init.ones_(module.weight)
