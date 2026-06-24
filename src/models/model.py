@@ -111,9 +111,9 @@ class GPT(pl.LightningModule):
     
     # Рассчитываем общее количество шагов обучения (нужно для планировщика)
     # Эти данные мы подтянем из трейнера позже или зададим примерно
-        steps_per_epoch = 11750 // self.config.training.batch_size
+        steps_per_epoch = len(self.trainer.train_dataloader)
         total_steps = steps_per_epoch * self.config.training.max_epochs
-    
+        
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
             num_warmup_steps=self.config.training.warmup_steps, 
