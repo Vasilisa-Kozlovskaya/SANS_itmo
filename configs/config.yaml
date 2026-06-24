@@ -1,5 +1,5 @@
 model:
-  vocab_size: 30000
+  vocab_size: 8000
   n_embd: 384
   n_layer: 6
   n_head: 6
