@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from src.models.layers import SinusoidalPositionalEncoding, TransformerBlock
+from src.models.layers import SinusoidalPositionalEncoding, TransformerBlockGQA
 from src.training.scheduler import get_cosine_schedule_with_warmup
 import math
 
@@ -16,12 +16,7 @@ class GPT(pl.LightningModule):
         self.dropout = nn.Dropout(config.model.dropout)
 
         self.blocks = nn.Sequential(*[
-            TransformerBlock(
-                config.model.n_embd, 
-                config.model.n_head, 
-                config.model.block_size, 
-                config.model.dropout
-            ) for _ in range(config.model.n_layer)
+            TransformerBlockGQA(config) for _ in range(config.model.n_layer)
         ])
 
         self.ln_f = nn.LayerNorm(config.model.n_embd)
@@ -39,14 +34,26 @@ class GPT(pl.LightningModule):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx):
-        B, T = idx.size()
+    def forward(self, idx, past_key_values=None, use_cache=False):
         x = self.token_embedding(idx)
         x = self.pos_encoding(x)
-        x = self.dropout(x)
-        x = self.blocks(x)
+    
+        new_key_values = []
+        for i, block in enumerate(self.blocks):
+        # Передаем кэш в каждый блок. Если past_key_values - None, блок создаст новый
+            past_kv = past_key_values[i] if past_key_values is not None else None
+        
+        # Блок теперь возвращает (x, kv)
+            x, kv = block(x, past_key_value=past_kv, use_cache=use_cache)
+        
+            if use_cache:
+                new_key_values.append(kv)
+    
         x = self.ln_f(x)
         logits = self.lm_head(x)
+
+        if use_cache:
+            return logits, new_key_values
         return logits
 
     def training_step(self, batch, batch_idx):
@@ -75,18 +82,23 @@ class GPT(pl.LightningModule):
             self.parameters(), 
             lr=self.config.training.learning_rate, 
             weight_decay=self.config.training.weight_decay
+            betas=(0.9, 0.95)
         )
         
-        # Безопасное получение total_steps из конфига
-        total_steps = self.config.training.get('total_steps', 10000)
-        warmup_steps = self.config.training.get('warmup_steps', 500)
+        if self.trainer.max_steps > 0:
+            total_steps = self.trainer.max_steps
+        else:
+        # Считаем на основе данных: (кол-во батчей / аккумулирование) * эпохи
+            dataset_size = len(self.trainer.datamodule.train_dataloader()) if self.trainer.datamodule else len(self.trainer.train_dataloader)
+            total_steps = (dataset_size // self.trainer.accumulate_grad_batches) * self.trainer.max_epochs
 
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
-            num_warmup_steps=warmup_steps, 
-            num_training_steps=total_steps
+            num_warmup_steps=self.config.training.warmup_steps, 
+            num_training_steps=total_steps,
+            min_lr_ratio=0.1
         )
-        
+    
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

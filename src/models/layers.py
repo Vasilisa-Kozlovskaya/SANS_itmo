@@ -2,6 +2,55 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from src.backend.flash_attention import FlashAttentionFunction
+
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.n_head = config.model.n_head
+        self.n_kv_head = config.model.n_kv_head
+        self.n_groups = self.n_head // self.n_kv_head
+        self.head_dim = config.model.n_embd // self.n_head
+        
+        self.q_proj = nn.Linear(config.model.n_embd, self.n_head * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.model.n_embd, self.n_kv_head * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.model.n_embd, self.n_kv_head * self.head_dim, bias=False)
+        self.out_proj = nn.Linear(config.model.n_embd, config.model.n_embd, bias=False)
+        
+        self.dropout = config.model.dropout
+
+    def forward(self, x, past_key_value=None, use_cache=False):
+        B, T, C = x.size()
+        
+        q = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, H, T, d)
+        k = self.k_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
+
+        # Обработка KV-кэша
+        if past_key_value is not None:
+            prev_k, prev_v = past_key_value
+            k = torch.cat([prev_k, k], dim=2)
+            v = torch.cat([prev_v, v], dim=2)
+        
+        full_kv = (k, v) if use_cache else None
+
+        # Repeat KV heads для соответствия числу Query heads (GQA logic)
+        # (B, G, T, d) -> (B, H, T, d)
+        k_repeated = k.repeat_interleave(self.n_groups, dim=1)
+        v_repeated = v.repeat_interleave(self.n_groups, dim=1)
+
+        # Используем ваш Triton Flash Attention из ЛР3
+        # Кернел ожидает (B, H, T, d)
+        if self.training:
+            # Во время обучения используем Flash Attention
+            out = FlashAttentionFunction.apply(q, k_repeated, v_repeated, 1.0/math.sqrt(self.head_dim))
+        else:
+            # Во время инференса (особенно с KV-cache) можно использовать стандартный torch или Triton
+            # так как T обычно равен 1 для нового токена
+            out = F.scaled_dot_product_attention(q, k_repeated, v_repeated, is_causal=True if past_key_value is None else False)
+
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_proj(out), full_kv
 
 class SinusoidalPositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=512):
@@ -45,6 +94,29 @@ class MultiHeadAttention(nn.Module):
         y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.proj(y)
+    
+class TransformerBlockGQA(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.model.n_embd)
+        self.attn = GroupedQueryAttention(config)
+        self.ln2 = nn.LayerNorm(config.model.n_embd)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.model.n_embd, 4 * config.model.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.model.n_embd, config.model.n_embd),
+            nn.Dropout(config.model.dropout),
+        )
+
+    def forward(self, x, past_key_value=None, use_cache=False):
+        # Применяем внимание
+        attn_out, kv = self.attn(self.ln1(x), past_key_value=past_key_value, use_cache=use_cache)
+        x = x + attn_out
+        
+        # Применяем MLP
+        x = x + self.mlp(self.ln2(x))
+        
+        return x, kv # Всегда возвращаем (результат, кэш)
 
 class TransformerBlock(nn.Module):
     def __init__(self, n_embd, n_head, block_size, dropout):
