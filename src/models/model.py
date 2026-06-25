@@ -9,6 +9,7 @@ class GPT(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
         self.save_hyperparameters(config)
+        self.total_steps = total_steps
         self.config = config
 
         self.token_embedding = nn.Embedding(config.model.vocab_size, config.model.n_embd)
@@ -84,12 +85,9 @@ class GPT(pl.LightningModule):
             lr=self.config.training.learning_rate, 
             weight_decay=self.config.training.weight_decay,
             betas=(0.9, 0.95)
-       )
-    
-    # 2. Получение общего количества шагов
-    # В Lightning это свойство автоматически считает (len(dataloader) / accumulate_grad) * max_epochs
-        try:
-            total_steps = 10000
+        )
+        
+        total_steps = self.total_steps if self.total_steps else self.trainer.estimated_stepping_batches
 
     # 3. Настройка планировщика
         scheduler = get_cosine_schedule_with_warmup(
