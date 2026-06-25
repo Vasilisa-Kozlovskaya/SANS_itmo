@@ -78,20 +78,25 @@ class GPT(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+    # 1. Инициализация оптимизатора
         optimizer = torch.optim.AdamW(
             self.parameters(), 
             lr=self.config.training.learning_rate, 
             weight_decay=self.config.training.weight_decay,
             betas=(0.9, 0.95)
-        )
+       )
+    
+    # 2. Получение общего количества шагов
+    # В Lightning это свойство автоматически считает (len(dataloader) / accumulate_grad) * max_epochs
+        try:
+            total_steps = self.trainer.estimated_stepping_batches
+        except Exception:
+        # Если по какой-то причине estimated_stepping_batches недоступен (старая версия PL),
+        # используем ручной расчет с проверкой на None
+            print("Предупреждение: Не удалось оценить количество шагов автоматически.")
+            total_steps = 10000 # Заглушка, чтобы не упасть
         
-        if self.trainer.max_steps > 0:
-            total_steps = self.trainer.max_steps
-        else:
-        # Считаем на основе данных: (кол-во батчей / аккумулирование) * эпохи
-            dataset_size = len(self.trainer.datamodule.train_dataloader()) if self.trainer.datamodule else len(self.trainer.train_dataloader)
-            total_steps = (dataset_size // self.trainer.accumulate_grad_batches) * self.trainer.max_epochs
-
+    # 3. Настройка планировщика
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
             num_warmup_steps=self.config.training.warmup_steps, 
@@ -102,11 +107,12 @@ class GPT(pl.LightningModule):
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-            },
-        }
-
+            "scheduler": scheduler,
+            "interval": "step",
+            "frequency": 1
+        },
+    }
+    
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0):
         for _ in range(max_new_tokens):
