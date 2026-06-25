@@ -64,7 +64,7 @@ class GPT(pl.LightningModule):
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('train_perplexity', torch.exp(loss.detach()), on_step=False, on_epoch=True)
+        self.log('train_ppl', torch.exp(loss.detach()), on_step=False, on_epoch=True)
         self.log('logits_max', logits.detach().max(), on_step=True, on_epoch=False)
         self.log('logits_min', logits.detach().min(), on_step=True, on_epoch=False)
         return loss
@@ -75,7 +75,7 @@ class GPT(pl.LightningModule):
         logits = self(idx)
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         self.log('val_loss', loss, on_epoch=True, prog_bar=True)
-        self.log('val_perplexity', torch.exp(loss.detach()), on_epoch=True, prog_bar=True)
+        self.log('val_ppl', torch.exp(loss.detach()), on_epoch=True, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
