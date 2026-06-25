@@ -81,7 +81,7 @@ class GPT(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), 
             lr=self.config.training.learning_rate, 
-            weight_decay=self.config.training.weight_decay
+            weight_decay=self.config.training.weight_decay,
             betas=(0.9, 0.95)
         )
         
