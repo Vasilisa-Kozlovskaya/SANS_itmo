@@ -6,7 +6,7 @@ from src.training.scheduler import get_cosine_schedule_with_warmup
 import math
 
 class GPT(pl.LightningModule):
-    def __init__(self, config):
+    def __init__(self, config, total_steps=None):
         super().__init__()
         self.save_hyperparameters(config)
         self.total_steps = total_steps
@@ -16,7 +16,7 @@ class GPT(pl.LightningModule):
         self.pos_encoding = SinusoidalPositionalEncoding(config.model.n_embd, config.model.block_size)
         self.dropout = nn.Dropout(config.model.dropout)
 
-        self.blocks = nn.Sequential(*[
+        self.blocks = nn.ModuleList([
             TransformerBlockGQA(config) for _ in range(config.model.n_layer)
         ])
 
@@ -86,14 +86,18 @@ class GPT(pl.LightningModule):
             weight_decay=self.config.training.weight_decay,
             betas=(0.9, 0.95)
         )
+
+        if self.total_steps is not None:
+            num_steps = self.total_steps
+        else:
+            num_steps = self.trainer.estimated_stepping_batches
         
-        total_steps = self.total_steps if self.total_steps else self.trainer.estimated_stepping_batches
 
     # 3. Настройка планировщика
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
             num_warmup_steps=self.config.training.warmup_steps, 
-            num_training_steps=total_steps,
+            num_training_steps=num_steps,
             min_lr_ratio=0.1
         )
     
