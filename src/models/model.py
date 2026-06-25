@@ -89,13 +89,8 @@ class GPT(pl.LightningModule):
     # 2. Получение общего количества шагов
     # В Lightning это свойство автоматически считает (len(dataloader) / accumulate_grad) * max_epochs
         try:
-            total_steps = self.trainer.estimated_stepping_batches
-        except Exception:
-        # Если по какой-то причине estimated_stepping_batches недоступен (старая версия PL),
-        # используем ручной расчет с проверкой на None
-            print("Предупреждение: Не удалось оценить количество шагов автоматически.")
-            total_steps = 10000 # Заглушка, чтобы не упасть
-        
+            total_steps = 10000
+
     # 3. Настройка планировщика
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
