@@ -26,6 +26,9 @@ class GroupedQueryAttention(nn.Module):
         k = self.k_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
 
+        if q.dtype == torch.float32:
+            q, k, v = q.half(), k.half(), v.half()
+
         # Обработка KV-кэша
         if past_key_value is not None:
             prev_k, prev_v = past_key_value
