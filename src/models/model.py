@@ -64,9 +64,8 @@ class GPT(pl.LightningModule):
         
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
-        # Логируем Loss и PPL
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('train_ppl', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
+        self.log('train_perplexity', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
 
@@ -77,12 +76,11 @@ class GPT(pl.LightningModule):
         
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
-        # Логируем Loss и PPL для валидации
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_ppl', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_perplexity', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
-
+    
     def configure_optimizers(self):
     # 1. Инициализация оптимизатора
         optimizer = torch.optim.AdamW(
