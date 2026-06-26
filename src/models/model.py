@@ -61,21 +61,26 @@ class GPT(pl.LightningModule):
         idx = batch[:, :-1]
         targets = batch[:, 1:]
         logits = self(idx)
+        
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         
+        # Логируем Loss и PPL
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('train_ppl', torch.exp(loss.detach()), on_step=False, on_epoch=True)
-        self.log('logits_max', logits.detach().max(), on_step=True, on_epoch=False)
-        self.log('logits_min', logits.detach().min(), on_step=True, on_epoch=False)
+        self.log('train_ppl', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
+        
         return loss
 
     def validation_step(self, batch, batch_idx):
         idx = batch[:, :-1]
         targets = batch[:, 1:]
         logits = self(idx)
+        
         loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-        self.log('val_loss', loss, on_epoch=True, prog_bar=True)
-        self.log('val_ppl', torch.exp(loss.detach()), on_epoch=True, prog_bar=True)
+        
+        # Логируем Loss и PPL для валидации
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_ppl', torch.exp(loss), on_step=False, on_epoch=True, prog_bar=True)
+        
         return loss
 
     def configure_optimizers(self):
