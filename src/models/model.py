@@ -12,18 +12,23 @@ class GPT(pl.LightningModule):
         self.total_steps = total_steps
         self.config = config
 
+        # Эмбеддинги и позиционное кодирование
         self.token_embedding = nn.Embedding(config.model.vocab_size, config.model.n_embd)
         self.pos_encoding = SinusoidalPositionalEncoding(config.model.n_embd, config.model.block_size)
         self.dropout = nn.Dropout(config.model.dropout)
 
+        # Стек слоев GQA
         self.blocks = nn.ModuleList([
             TransformerBlockGQA(config) for _ in range(config.model.n_layer)
         ])
 
         self.ln_f = nn.LayerNorm(config.model.n_embd)
         self.lm_head = nn.Linear(config.model.n_embd, config.model.vocab_size, bias=False)
+        
+        # Weight Tying: используем одни и те же веса для эмбеддингов и предсказания токенов
         self.token_embedding.weight = self.lm_head.weight
 
+        # Инициализация весов (нормальное распределение с std=0.02)
         self.apply(self._init_weights)
         self.criterion = nn.CrossEntropyLoss()
 
@@ -58,6 +63,7 @@ class GPT(pl.LightningModule):
         return logits
 
     def training_step(self, batch, batch_idx):
+        # Реализация Language Modeling: предсказываем токен на позиции i+1 по токену на позиции i
         idx = batch[:, :-1]
         targets = batch[:, 1:]
         logits = self(idx)
@@ -96,7 +102,7 @@ class GPT(pl.LightningModule):
             num_steps = self.trainer.estimated_stepping_batches
         
 
-    # 3. Настройка планировщика
+    # Косинусное затухание помогает модели плавно сойтись к минимуму
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, 
             num_warmup_steps=self.config.training.warmup_steps, 

@@ -9,9 +9,11 @@ class GroupedQueryAttention(nn.Module):
         super().__init__()
         self.n_head = config.model.n_head
         self.n_kv_head = config.model.n_kv_head
+        # Количество Query-голов, приходящихся на одну KV-голову
         self.n_groups = self.n_head // self.n_kv_head
         self.head_dim = config.model.n_embd // self.n_head
         
+         # Линейные проекции.k и v имеют меньшую размерность (n_kv_head * head_dim)
         self.q_proj = nn.Linear(config.model.n_embd, self.n_head * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.model.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.model.n_embd, self.n_kv_head * self.head_dim, bias=False)
@@ -22,27 +24,32 @@ class GroupedQueryAttention(nn.Module):
     def forward(self, x, past_key_value=None, use_cache=False):
         B, T, C = x.size()
         
+        # 1. Проецируем вход в Q, K, V и меняем размерность для голов
         q = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, H, T, d)
         k = self.k_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
 
-        # Обработка KV-кэша
+        # 2. Логика KV-кэширования (инференс)
+        # Если пришел кэш из прошлого шага, "приклеиваем" новые K и V к старым
         if past_key_value is not None:
             prev_k, prev_v = past_key_value
             k = torch.cat([prev_k, k], dim=2)
             v = torch.cat([prev_v, v], dim=2)
         
+        # Сохраняем текущее состояние KV для будущих шагов
         full_kv = (k, v) if use_cache else None
 
         # Repeat KV heads для соответствия числу Query heads (GQA logic)
         # (B, G, T, d) -> (B, H, T, d)
+        # Размножаем KV-головы, чтобы их количество совпало с Q-головами (для матричного умножения)
         k_repeated = k.repeat_interleave(self.n_groups, dim=1)
         v_repeated = v.repeat_interleave(self.n_groups, dim=1)
 
-        # Используем ваш Triton Flash Attention из ЛР3
+        # Используем Triton Flash Attention из ЛР3
         # Кернел ожидает (B, H, T, d)
         if self.training:
             # Во время обучения используем Flash Attention
+            # Он экономит память и работает быстрее за счет тайлинга (tiling)
             out = FlashAttentionFunction.apply(q, k_repeated, v_repeated, 1.0/math.sqrt(self.head_dim))
         else:
             # Во время инференса (особенно с KV-cache) можно использовать стандартный torch или Triton
@@ -109,11 +116,12 @@ class TransformerBlockGQA(nn.Module):
         )
 
     def forward(self, x, past_key_value=None, use_cache=False):
-        # Применяем внимание
+        # 1. Attention + Residual Connection
         attn_out, kv = self.attn(self.ln1(x), past_key_value=past_key_value, use_cache=use_cache)
         x = x + attn_out
         
         # Применяем MLP
+        #  MLP + Residual Connection
         x = x + self.mlp(self.ln2(x))
         
         return x, kv # Всегда возвращаем (результат, кэш)
