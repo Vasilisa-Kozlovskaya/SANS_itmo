@@ -1,6 +1,6 @@
 import torch
-from models.model import GPT
-from tokenization.bpe import BpeTokenizer
+from src.models.model import GPT
+from src.tokenization.bpe import BpeTokenizer
 
 def generate_text(model, tokenizer, prompt, max_new_tokens=50, temperature=0.8):
     model.eval()
