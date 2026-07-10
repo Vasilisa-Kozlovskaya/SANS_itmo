@@ -1,0 +1,23 @@
+# configs/config.yaml
+model:
+  vocab_size: 50257      # Размер словаря (из ЛР1)
+  d_model: 512
+  n_heads: 8
+  d_ff: 2084
+  n_layers: 10
+  dropout: 0.1
+
+training:
+  lr: 3e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  max_steps: 12000
+  batch_size: 4
+  gradient_clip_val: 1.0  # Максимально допустимая глобальная норма градиентов (Задание 2.3.3)
+  log_every_n_steps: 10
+  val_check_interval: 250 # Как часто запускать валидацию внутри эпохи
+
+project:
+  name: "GPT_Language_Model_LR2"
+  title: "Run_with_Packed_Batching"
+  checkpoint_dir: ${oc.env:CHECKPOINT_DIR, "./checkpoints"} # Подтягивание пути из .env

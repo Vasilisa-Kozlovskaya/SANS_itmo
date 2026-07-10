@@ -1,0 +1,11 @@
+torch
+pytorch-lightning
+transformers
+warcio
+trafilatura
+langdetect
+ftfy
+tokenizers
+requests
+numpy
+datasets
