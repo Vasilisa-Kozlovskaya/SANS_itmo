@@ -1,0 +1,23 @@
+data/raw/
+data/processed/
+checkpoints/
+!best_gpt_model-epoch=02-val_loss=5.ckpt
+__pycache__/
+*.gz
+
+# Кэш библиотек datasets от Hugging Face
+.pycache/
+.cache/
+
+tb_logs/
+lightning_logs/
+logs/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ipynb_checkpoints/
+
+.DS_Store
+Thumbs.db
